@@ -1,0 +1,6 @@
+name: usable
+version: 0.1.0
+description: "Usable MCP-backed memory provider for Hermes Agent."
+hooks:
+  - on_session_end
+  - on_memory_write
