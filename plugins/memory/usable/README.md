@@ -21,6 +21,8 @@ Or use the helper script from this repository:
 
 ```bash
 ./scripts/install_into_hermes.sh /path/to/hermes-agent
+# or
+./scripts/install_into_hermes.sh ~/.hermes
 ```
 
 Then activate it:
