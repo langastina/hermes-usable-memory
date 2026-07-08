@@ -47,8 +47,12 @@ JSON
 
 ## Required configuration
 
-- `USABLE_MCP_BEARER_TOKEN`: bearer token for the Usable MCP endpoint
 - `workspace_id`: target workspace UUID in `$HERMES_HOME/usable.json` or `USABLE_WORKSPACE_ID`
+- authentication, either:
+  - native Hermes MCP OAuth cache for the `usable` MCP server (preferred), or
+  - `USABLE_MCP_BEARER_TOKEN` / `MCP_BEARER_TOKEN` for a manually supplied bearer token
+
+When Hermes already has `mcp_servers.usable` configured with OAuth, this provider reuses `$HERMES_HOME/mcp-tokens/usable.json` and refreshes the access token from the cached refresh token when needed. You do not need to copy the short-lived access token into `.env`.
 
 The provider also accepts `MCP_BEARER_TOKEN` as a fallback if you already use that env var elsewhere.
 

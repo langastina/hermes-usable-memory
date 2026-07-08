@@ -6,6 +6,7 @@ import os
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -51,6 +52,93 @@ def _listish(value: Any) -> List[str]:
     return []
 
 
+def _read_json(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception as exc:
+        logger.debug("Failed to read %s: %s", path, exc)
+    return None
+
+
+def _write_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _oauth_token_from_mcp_cache(server_name: str = "usable") -> str:
+    """Return a fresh bearer token from Hermes' native MCP OAuth cache.
+
+    The Usable MCP server is already configured in Hermes with OAuth PKCE.
+    This memory provider can reuse that cache so users do not need to copy a
+    short-lived access token into .env. If the cached access token is expired
+    and a refresh token is present, refresh it synchronously and persist the
+    updated token file in the same layout Hermes' MCP client uses.
+    """
+    from hermes_constants import get_hermes_home
+
+    token_dir = get_hermes_home() / "mcp-tokens"
+    token_path = token_dir / f"{server_name}.json"
+    client_path = token_dir / f"{server_name}.client.json"
+    meta_path = token_dir / f"{server_name}.meta.json"
+
+    token_data = _read_json(token_path) or {}
+    access_token = str(token_data.get("access_token") or "")
+    expires_at = float(token_data.get("expires_at") or 0)
+    if access_token and expires_at > time.time() + 60:
+        return access_token
+
+    refresh_token = str(token_data.get("refresh_token") or "")
+    if not refresh_token:
+        return access_token
+
+    client_data = _read_json(client_path) or {}
+    meta_data = _read_json(meta_path) or {}
+    token_endpoint = str(meta_data.get("token_endpoint") or "")
+    client_id = str(client_data.get("client_id") or "")
+    if not token_endpoint or not client_id:
+        return access_token
+
+    form = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": client_id,
+    }
+    client_secret = client_data.get("client_secret")
+    if client_secret:
+        form["client_secret"] = str(client_secret)
+
+    request = urllib.request.Request(
+        token_endpoint,
+        data=urllib.parse.urlencode(form).encode("utf-8"),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20.0) as response:
+            refreshed = json.loads(response.read().decode("utf-8") or "{}")
+    except Exception as exc:
+        logger.warning("Failed to refresh Usable MCP OAuth token: %s", exc)
+        return access_token
+
+    new_access_token = str(refreshed.get("access_token") or "")
+    if not new_access_token:
+        return access_token
+
+    expires_in = int(refreshed.get("expires_in") or token_data.get("expires_in") or 300)
+    refreshed.setdefault("refresh_token", refresh_token)
+    refreshed.setdefault("token_type", token_data.get("token_type", "Bearer"))
+    refreshed.setdefault("scope", token_data.get("scope", ""))
+    refreshed["expires_in"] = expires_in
+    refreshed["expires_at"] = time.time() + expires_in
+    _write_json(token_path, refreshed)
+    return new_access_token
+
+
 def _load_config() -> Dict[str, Any]:
     from hermes_constants import get_hermes_home
 
@@ -84,6 +172,9 @@ def _load_config() -> Dict[str, Any]:
                 config.update({key: value for key, value in file_config.items() if value not in (None, "")})
         except Exception as exc:
             logger.warning("Failed to parse usable.json: %s", exc)
+
+    if not config.get("bearer_token"):
+        config["bearer_token"] = _oauth_token_from_mcp_cache("usable")
 
     config["default_tags"] = _listish(config.get("default_tags"))
     config["search_tags"] = _listish(config.get("search_tags"))
